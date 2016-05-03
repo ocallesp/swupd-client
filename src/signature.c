@@ -37,16 +37,21 @@
 #warning "TODO pick signing scheme"
 
 #ifdef SIGNING
-	bool signing_enabled = true;
+#define ENABLED true
 #else
-	bool signing_enabled = false;
+#define ENABLED false
 #endif
+
+#define CERTS_DIRECTORY "/usr/share/clear/certs"
+
+bool signing_enabled = ENABLED;
 
 static bool validate_signature(FILE *, FILE *);
 static bool validate_certificate(void);
 static int verify_callback(int, X509_STORE_CTX *);
 static bool get_pubkey(const char *);
 static bool get_certificates(void);
+static X509 *load_certificate(const char *);
 
 static bool initialized = false;
 static EVP_PKEY *pkey;
@@ -87,7 +92,8 @@ bool signature_initialize(const char *ca_cert_filename)
 		return false;
 	}
 
-	if (!get_pubkey(ca_cert_filename)) {
+	pkey = load_certificate(ca_cert_filename);
+	if (!pkey) {
 		return false;
 	}
 
@@ -147,6 +153,7 @@ bool signature_verify(const char *data_filename, const char *sig_filename)
 		goto error;
 	}
 
+
 	/* read data from file */
 	fp_data = fopen(data_filename, "r");
 	if (!fp_data) {
@@ -155,10 +162,6 @@ bool signature_verify(const char *data_filename, const char *sig_filename)
 	}
 
 	result = validate_signature(fp_data, fp_sig);
-	fclose(fp_data);
-	fclose(fp_sig);
-
-	return result;
 
 error:
 	if (fp_data) {
@@ -170,51 +173,6 @@ error:
     return result;
 }
 
-/* 
- * Makes sure the certificate exits and extract the public key 
- * from it 
- *
- * cert_filename: certificate used to verify signatures.
- *
- * returns: true if could get the pub key, otherwise false 
- */
-static bool get_pubkey(const char *cert_filename)
-{
-	FILE *fp_pubkey = NULL;
-
-	/* Read public key */
-	fp_pubkey = fopen(cert_filename, "r");
-	if (!fp_pubkey) {
-	fprintf(stderr, "Failed fopen %s\n", cert_filename);
-	goto error;
-	}
-
-	cert = PEM_read_X509(fp_pubkey, NULL, NULL, NULL);
-	if (!cert) {
-	goto error;
-	}
-
-	pkey = X509_get_pubkey(cert);
-	if (!pkey) {
-		goto error;
-	}
-
-	return true;
-
-error:
-	ERR_print_errors_fp(stderr);
-
-	if (fp_pubkey) {
-		fclose(fp_pubkey);
-	}
-	if (pkey) {
-		EVP_PKEY_free(pkey);
-	}
-	if (cert) {
-		X509_free(cert);
-	}
-	return false;
-}
 
 /* 
  * This is the main part of the signature validation. 
@@ -384,6 +342,39 @@ int verify_callback(int ok, X509_STORE_CTX *stor)
 		X509_verify_cert_error_string(stor->error));
 	}
 	return ok;
+}
+
+
+/* 
+ * Extract the certificates from files
+ *
+ * file: the file name of the certificate in PEM format
+ *
+ * returns: the certificate, otherwise NULL 
+ */
+X509 *load_certificate(const char *file)
+{
+	FILE *fp = NULL;
+	X509 *cert = NULL;
+
+	fp = fopen(file, "r");
+	if (!fp) {
+		fprintf(stderr, "Failed fopen %s\n", file);
+		goto error;
+	}
+
+	cert = PEM_read_X509(fp, NULL, NULL, NULL);
+	if (!cert) {
+		ERR_print_errors_fp(stderr);
+		goto error;
+	}
+
+error:
+	if (fp) {
+		fclose(fp);
+	}
+
+	return cert;
 }
 
 /* 
